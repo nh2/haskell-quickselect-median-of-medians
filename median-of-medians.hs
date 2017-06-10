@@ -67,7 +67,7 @@ select i xs
   | null (drop 5 xs) = sort xs !! i -- checks if the list length is <= 5 without computing the full length
   | k <= i && i < k+e = pivot
   | i < k = select i smaller
-  | otherwise = select (i - k - 1) (drop 1 equal ++ larger)
+  | otherwise = select (i - k - e) larger
   where
     pivot = medianOfMedians (map medianSpecializedTo5 (chunksOf 5 xs))
     (smaller, equal, larger) = pivotPartition xs pivot
