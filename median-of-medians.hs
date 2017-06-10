@@ -222,7 +222,7 @@ selectVectorDestructive i x v = do
         indicesValues <- for [0..chunkSize-1] $ \o -> fmap (c*5 + o, ) (v `myread` (c*5 + o)) -- TODO don't use lists
         return $ fst (sortOn snd indicesValues !! medianIndex chunkSize)
 
-    traceShow ("chunkMedianIndex swap", c*5, chunkMedianIndex) VGM.swap v (c*5) chunkMedianIndex
+    traceShow ("chunkMedianIndex swap", c, chunkMedianIndex) VGM.swap v c chunkMedianIndex
 
   if (n <= 5)
     then do
