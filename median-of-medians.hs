@@ -243,19 +243,27 @@ selectVectorDestructive i x v = do
             | k > endIndex -> do
                 -- The element at position (k-1) is <= pivot, so we can swap it with the pivot.
                 let middle = medianIndex n
-                -- Write pivot into the middle (pivotTargetPosition)
-                let pivotTargetPosition = if
-                      | otherwise      -> k - 1
+                -- Write pivot into the "middle" (pivotTargetPosition)
+                let pivotTargetPosition = k - 1
                 traceShow ("swap pivot", 0, k-1) $ VGM.swap v 0 pivotTargetPosition
                 return pivotTargetPosition
             | otherwise -> do
                 x <- v `myread` k
-                if (x > pivot)
-                  then do
-                    traceShow ("swap >", k, endIndex) $ VGM.swap v k endIndex
-                    partitionLoop k (endIndex - 1) equalCount
-                  else do
-                    partitionLoop (k + 1) endIndex (equalCount + if x == pivot then 1 else 0)
+                if
+                  | x > pivot -> do
+                      traceShow ("swap >", k, endIndex) $ VGM.swap v k endIndex
+                      partitionLoop k (endIndex - 1) equalCount
+                  | x < pivot -> do
+                      partitionLoop (k + 1) endIndex equalCount
+                  -- x == pivot
+                  -- We put equal elements alternately into the left and right side,
+                  -- so that even for repeated elements equal to the median, the
+                  -- partition is still nicely balanced, guaranteeing O(n) run time
+                  -- even in that case.
+                  | equalCount `rem` 2 == 0 -> partitionLoop (k + 1) endIndex       (equalCount + 1)
+                  | otherwise               -> do
+                                                  traceShow ("swap >", k, endIndex) $ VGM.swap v k endIndex
+                                                  partitionLoop k       (endIndex - 1) (equalCount + 1)
 
       pivotIndex <- partitionLoop 1 (n - 1) 0
 
