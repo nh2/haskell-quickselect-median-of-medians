@@ -10,6 +10,8 @@
 {-# LANGUAGE ScopedTypeVariables #-}
 {-# LANGUAGE TupleSections #-}
 
+{-# LANGUAGE TypeFamilies #-}
+
 module Main (main) where
 
 import           Control.DeepSeq (deepseq)
@@ -19,6 +21,7 @@ import           Control.Monad.ST (runST)
 import           Data.Foldable (for_)
 import           Data.List (sort, partition, sortOn)
 import           Data.Traversable (for)
+import           Data.Tuple (swap)
 import           Data.Vector (Vector, (!))
 import qualified Data.Vector as V
 import qualified Data.Vector.Generic as VG
@@ -28,20 +31,37 @@ import qualified Data.Vector.Algorithms.Heap as Heap
 import qualified Data.Vector.Algorithms.Merge as Merge
 import qualified Data.Vector.Algorithms.Intro as Intro
 import           GHC.Exts (build)
+import           GHC.Stack (HasCallStack)
 import           System.Random
 
 import           Criterion.Main
 import           Test.QuickCheck
 
 
+import qualified Debug.Trace as Trace
+
+traceEnabled = False
+
+traceShow :: Show a => a -> b -> b
+traceShow a b = if traceEnabled then Trace.traceShow a b else b
+
+trace :: String -> a -> a
+trace str a = if traceEnabled then Trace.trace str a else a
+
+
 median :: (Ord a) => [a] -> a
 median = medianOfMedians
 
 
+medianIndex :: Int -> Int
+medianIndex size = (size - 1) `quot` 2
+
+
 medianOfMedians :: (Ord a) => [a] -> a
-medianOfMedians xs = select (((length xs) - 1) `quot` 2) xs
+medianOfMedians xs = select (medianIndex (length xs)) xs
 
 
+-- | Selects the i-th smallest element (i=0 is the smallest element).
 select :: (Ord a) => Int -> [a] -> a
 select i xs
   | null (drop 5 xs) = sort xs !! i -- checks if the list length is <= 5 without computing the full length
@@ -81,7 +101,7 @@ selectBySort i xs
   | otherwise = sort xs !! i
 
 medianBySort :: (Ord a) => [a] -> a
-medianBySort xs = selectBySort ((length xs - 1) `quot` 2) xs
+medianBySort xs = selectBySort (medianIndex (length xs)) xs
 
 
 thirdSmallestOf5 :: (Ord a) => a -> a -> a -> a -> a -> a
@@ -115,7 +135,7 @@ thirdSmallestOf5 a b c d e
 
 
 sortedVectorMedian :: (Ord a) => Vector a -> a
-sortedVectorMedian v = v ! ((V.length v - 1) `quot` 2)
+sortedVectorMedian v = v ! (medianIndex (V.length v))
 
 
 medianByVectorHeapSort :: (Ord a) => [a] -> a
@@ -158,65 +178,96 @@ thirdSmallestOf5WithIndices ai a bi b ci c di d ei e
     e_smaller_count = -ae - be - ce - de
 
 
+-- TODO remove
+myread :: (HasCallStack, PrimMonad m, MVector v e, Ord e, Show e) => v (PrimState m) e -> Int -> m e
+myread v i
+  | i < 0 || i >= VGM.length v = error $ "myread: out of bounds: " ++ show i ++ " " ++ show (0, VGM.length v)
+  | otherwise = VGM.read v i
 
 
-medianOfMediansVector :: (VG.Vector v e, Ord e) => v e -> e
-medianOfMediansVector v = selectVector (((VG.length v) - 1) `quot` 2) v
+medianOfMediansVector :: (VG.Vector v e, Ord e, Show e) => v e -> e
+medianOfMediansVector v = selectVector (medianIndex (VG.length v)) v
 
-selectVector :: (VG.Vector v e, Ord e) => Int -> v e -> e
+selectVector :: (VG.Vector v e, Ord e, Show e) => Int -> v e -> e
 selectVector i v = runST $ do
   vm <- VG.thaw v -- copies
-  selectVectorDestructive i vm
-  VGM.read vm 0 -- TODO ensure (length v > 0)
+  selectVectorDestructive i v vm
+  myread vm 0 -- TODO ensure (length v > 0)
+
+sliceBeginInclusiveEndExclusive :: (MVector vm e, Ord e, Show e) => Int -> Int -> vm s e -> vm s e
+sliceBeginInclusiveEndExclusive beginInclusive endExclusive v = VGM.slice beginInclusive (endExclusive - beginInclusive) v
 
 -- TODO test that it's stable
 
 -- Places the selected element at the beginning of the vector.
-selectVectorDestructive :: forall m v e . (PrimMonad m, MVector v e, Ord e) => Int -> v (PrimState m) e -> m ()
-selectVectorDestructive i v = do
+-- selectVectorDestructive :: forall m v e . (PrimMonad m, MVector v e, Ord e, Show e) => Int -> v (PrimState m) e -> m ()
+selectVectorDestructive :: forall m v vm e . (PrimMonad m, VG.Vector v e, MVector vm e, Ord e, Show e, VG.Mutable v ~ vm) => Int -> v e -> vm (PrimState m) e -> m ()
+selectVectorDestructive i x v = do
+  x' :: v e <- VG.freeze v
 
-  for_ [0..lastChunk] $ \c -> do -- TODO use `loop`
+  traceShow (i, VG.toList x') for_ [0..lastChunk] $ \c -> do -- TODO use `loop`
     let chunkSize
-          | c == lastChunk && not dividesPerfectly = 5
-          | otherwise                              = n `rem` 5
+          | c == lastChunk && not dividesPerfectly = n `rem` 5
+          | otherwise                              = 5
     !chunkMedianIndex <- case chunkSize of
       -- This happens only at the very end of the vector and if is length isn't divisible by 5
       5 -> do
-        e0 <- v `VGM.unsafeRead` (c*5 + 0)
-        e1 <- v `VGM.unsafeRead` (c*5 + 1)
-        e2 <- v `VGM.unsafeRead` (c*5 + 2)
-        e3 <- v `VGM.unsafeRead` (c*5 + 3)
-        e4 <- v `VGM.unsafeRead` (c*5 + 4)
+        e0 <- v `myread` (c*5 + 0)
+        e1 <- v `myread` (c*5 + 1)
+        e2 <- v `myread` (c*5 + 2)
+        e3 <- v `myread` (c*5 + 3)
+        e4 <- v `myread` (c*5 + 4)
         return $ thirdSmallestOf5WithIndices (c*5 + 0) e0 (c*5 + 1) e1 (c*5 + 2) e2 (c*5 + 3) e3 (c*5 + 4) e4
       _ -> do
-        indicesValues <- for [0..chunkSize-1] $ \o -> fmap (c*5 + o, ) (v `VGM.unsafeRead` (c*5 + o)) -- TODO don't use lists
-        return $ fst (sortOn snd indicesValues !! (chunkSize `quot` 2))
+        indicesValues <- for [0..chunkSize-1] $ \o -> fmap (c*5 + o, ) (v `myread` (c*5 + o)) -- TODO don't use lists
+        return $ fst (sortOn snd indicesValues !! medianIndex chunkSize)
 
-    VGM.unsafeSwap v (c*5) chunkMedianIndex
+    traceShow ("chunkMedianIndex swap", c*5, chunkMedianIndex) VGM.swap v (c*5) chunkMedianIndex
 
-  when (n > 5) $ do
-    destructiveMedian (VGM.unsafeSlice 0 numChunks v)
-    selectVectorDestructive (numChunks `quot` 2) v
-    pivot <- v `VGM.unsafeRead` 0
+  if (n <= 5)
+    then do
+      values <- for [0..n-1] (v `myread`) -- TODO ugly
+      let (_, selectedIndex) = select i (zip values [(0::Int)..])
+      traceShow ("n <= 5 final swap", 0, selectedIndex) VGM.swap v 0 selectedIndex
 
-    let partitionLoop :: Int -> Int -> m Int
-        partitionLoop k endIndex
-          | k >= endIndex = do
-              -- Swap pivot into the middle
-              VGM.unsafeSwap v 0 k
-              return k
-          | otherwise = do
-              x <- v `VGM.unsafeRead` k
-              when (x > pivot) $ do
-                VGM.unsafeSwap v k endIndex
-              partitionLoop (k + 1) (endIndex - 1)
+    else do
+      destructiveMedian (sliceBeginInclusiveEndExclusive 0 numChunks v)
+      xAfterPivotFind :: v e <- VG.freeze v
+      pivot <- trace ("xAfterPivotFind " ++ show (VG.toList xAfterPivotFind)) $ v `myread` 0
 
-    pivotIndex <- partitionLoop 1 (n - 1)
+      let partitionLoop :: Int -> Int -> Int -> m Int
+          partitionLoop k endIndex equalCount = do
+           xInPartitionLoop :: v e <- VG.freeze v
+           trace ("partitionLoop " ++ show k ++ " " ++ show endIndex ++ " "++ show equalCount ++ " on " ++ show (VG.toList xInPartitionLoop) ++ " with pivot " ++ show pivot) $ if
 
-    if
-      | pivotIndex == i -> VGM.unsafeSwap v 0 pivotIndex -- v[pivotIndex] is the sought element; swap it into the front
-      | i < pivotIndex -> selectVectorDestructive i                    (VGM.unsafeSlice 0                (pivotIndex - 1) v)
-      | otherwise      -> selectVectorDestructive (i - pivotIndex - 1) (VGM.unsafeSlice (pivotIndex + 1) (n - 1)          v)
+            | k > endIndex -> do
+                -- The element at position (k-1) is <= pivot, so we can swap it with the pivot.
+                let middle = medianIndex n
+                -- Write pivot into the middle (pivotTargetPosition)
+                let pivotTargetPosition = if
+                      | otherwise      -> k - 1
+                traceShow ("swap pivot", 0, k-1) $ VGM.swap v 0 pivotTargetPosition
+                return pivotTargetPosition
+            | otherwise -> do
+                x <- v `myread` k
+                if (x > pivot)
+                  then do
+                    traceShow ("swap >", k, endIndex) $ VGM.swap v k endIndex
+                    partitionLoop k (endIndex - 1) equalCount
+                  else do
+                    partitionLoop (k + 1) endIndex (equalCount + if x == pivot then 1 else 0)
+
+      pivotIndex <- partitionLoop 1 (n - 1) 0
+
+      xAfterPart :: v e <- VG.freeze v
+
+      trace ("final pivot position: " ++ show pivotIndex ++ " at with pivot value " ++ show pivot) $ trace ("xAfterPart " ++ show (VG.toList xAfterPart)) $ if
+        | pivotIndex == i -> VGM.swap v 0 pivotIndex -- v[pivotIndex] is the sought element; swap it into the front
+        | i < pivotIndex -> do
+            trace "going left"  $ selectVectorDestructive i                    x (sliceBeginInclusiveEndExclusive 0                pivotIndex v)
+        | otherwise      -> do
+            trace "going right" $ selectVectorDestructive (i - pivotIndex - 1) x (sliceBeginInclusiveEndExclusive (pivotIndex + 1) n          v)
+            traceShow ("swap after recurse right", 0, pivotIndex + 1) $ VGM.swap v 0 (pivotIndex + 1)
 
   return ()
 
@@ -226,19 +277,23 @@ selectVectorDestructive i v = do
     lastChunk = numChunks - 1
     dividesPerfectly = n `rem` 5 == 0
 
-    destructiveMedian :: (PrimMonad m, MVector v e, Ord e) => v (PrimState m) e -> m ()
-    destructiveMedian v = selectVectorDestructive (VGM.length v `quot` 2) v
+    -- TODO re-type
+    -- destructiveMedian :: (PrimMonad m, MVector vm e, Ord e, Show e) => vm (PrimState m) e -> m ()
+    destructiveMedian v = selectVectorDestructive (medianIndex (VGM.length v)) x v
 
 
 tests = do
-  quickCheck $ \(l :: [Int]) -> length l > 1 ==> medianSpecializedTo5 l == medianBySort l
-  quickCheck $ \(l :: [Int]) -> length l > 1 ==> medianOfMedians l == medianBySort l
-  quickCheck $ \(l :: [Int]) -> length l > 1 ==> forAll (choose (0, length l - 1)) $ \i -> select i l == sort l !! i
+  check $ \(l :: [Int]) -> length l > 1 ==> medianSpecializedTo5 l == medianBySort l
+  check $ \(l :: [Int]) -> length l > 1 ==> medianOfMedians l == medianBySort l
+  check $ \(l :: [Int]) -> length l > 1 ==> forAll (choose (0, length l - 1)) $ \i -> select i l == sort l !! i
 
-  quickCheck $ \(l :: [Int]) -> length l > 1 ==> medianByVectorHeapSort l == medianBySort l
-  quickCheck $ \(l :: [Int]) -> length l > 1 ==> medianByVectorMergeSort l == medianBySort l
-  quickCheck $ \(l :: [Int]) -> length l > 1 ==> medianByVectorIntroSort l == medianBySort l
+  check $ \(l :: [Int]) -> length l > 1 ==> medianByVectorHeapSort l == medianBySort l
+  check $ \(l :: [Int]) -> length l > 1 ==> medianByVectorMergeSort l == medianBySort l
+  check $ \(l :: [Int]) -> length l > 1 ==> medianByVectorIntroSort l == medianBySort l
 
+  check $ \(l :: [Int]) -> length l > 1 ==> medianOfMediansVector (V.fromList l) == medianBySort l
+  where
+    check = quickCheckWith stdArgs { maxSuccess = 1000 }
 
 main = do
   tests
