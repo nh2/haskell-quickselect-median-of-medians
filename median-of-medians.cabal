@@ -1,0 +1,25 @@
+name:                median-of-medians
+version:             0.1.0.0
+homepage:            https://github.com/nh2/median-of-medians#readme
+license:             BSD3
+license-file:        LICENSE
+author:              Niklas Hambüchen
+maintainer:          mail@nh2.me
+copyright:           2017 Niklas Hambüchen
+category:            Web
+build-type:          Simple
+extra-source-files:  README.md
+cabal-version:       >=1.10
+
+executable median-of-medians
+  main-is:             Main.hs
+  ghc-options:         -rtsopts
+  build-depends:       base
+                     , criterion
+                     , random
+                     , vector
+                     , deepseq
+                     , primitive
+                     , QuickCheck
+                     , vector-algorithms
+                     , loop
